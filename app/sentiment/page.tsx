@@ -9,264 +9,330 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ArrowLeft, Search, AlertTriangle } from "lucide-react"
 import { SentimentAnalysis } from "../components/sentiment-analysis"
-import { WordCloud } from "../components/word-cloud"
+import { EnhancedWordCloud } from "../components/enhanced-word-cloud"
+import { SentimentTimeline } from "../components/sentiment-timeline"
 import { fetchTwitterGraph } from "../actions"
-import { getUserTweets } from "@/lib/twitter-api"
-import { analyzeTweetsSentiment } from "@/lib/sentiment-service"
+import { getUserTweets, searchTweets, getTweetsByHashtag } from "@/lib/twitter-api"
+import { analyzeTweetsSentiment, extractKeyTerms, calculateOverallSentiment } from "@/lib/sentiment-service"
 import type { GraphData, TwitterTweet } from "@/types/twitter"
+import type { SentimentType } from "@/lib/sentiment-service"
 
 export default function SentimentPage() {
   const router = useRouter()
   const [searchQuery, setSearchQuery] = useState("")
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] })
   const [tweets, setTweets] = useState<(TwitterTweet & { sentiment: any })[]>([])
+  const [wordCloudData, setWordCloudData] = useState<Array<{
+    text: string
+    value: number
+    sentiment: "positive" | "negative" | "neutral"
+  }>>([])
+  const [overallSentiment, setOverallSentiment] = useState<{
+    averageScore: number
+    type: SentimentType
+    distribution: Record<string, number>
+  }>({
+    averageScore: 0,
+    type: "neutral",
+    distribution: {
+      "very-negative": 0,
+      "negative": 0,
+      "neutral": 0,
+      "positive": 0,
+      "very-positive": 0
+    }
+  })
+  const [timelineData, setTimelineData] = useState<Array<{
+    date: string
+    sentiment: number
+    tweets: number
+  }>>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [usingSampleData, setUsingSampleData] = useState(false)
   const [selectedUsername, setSelectedUsername] = useState<string | null>(null)
 
-  // Add word cloud data state
-  const [wordCloudData, setWordCloudData] = useState<
-    Array<{
-      text: string
-      value: number
-      sentiment: "positive" | "negative" | "neutral"
-    }>
-  >([])
-
-  // Load initial data
-  useEffect(() => {
-    loadData("VitalikButerin")
-  }, [])
-
-  // Function to load data
-  const loadData = async (username: string) => {
-    if (!username) return
+  // Handle search
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return
 
     setLoading(true)
     setError(null)
+    setTweets([])
+    setWordCloudData([])
+    setTimelineData([])
+    setSelectedUsername(null)
 
     try {
-      // Fetch graph data
-      const { data, usingSampleData } = await fetchTwitterGraph(username, 1)
-      setGraphData(data)
-      setUsingSampleData(usingSampleData)
-
-      // Find the seed node
-      const seedNode = data.nodes.find((node) => node.group === "seed")
-      if (seedNode) {
-        setSelectedUsername(seedNode.username)
-
-        // Fetch tweets for sentiment analysis
-        const userTweets = await getUserTweets(seedNode.id)
-        if (userTweets.length > 0) {
-          const { tweets: analyzedTweets } = analyzeTweetsSentiment(userTweets)
-          setTweets(analyzedTweets)
-
-          // Process word cloud data
-          processWordCloudData(analyzedTweets)
+      // Determine if search is for a username, hashtag, or keyword
+      let fetchedTweets: TwitterTweet[] = []
+      
+      if (searchQuery.startsWith("@")) {
+        // Username search
+        const username = searchQuery.substring(1)
+        setSelectedUsername(username)
+        
+        // Get graph data to find user ID
+        const { data } = await fetchTwitterGraph(username, 1)
+        setGraphData(data)
+        
+        // Find the user node
+        const userNode = data.nodes.find(node => 
+          node.username.toLowerCase() === username.toLowerCase()
+        )
+        
+        if (userNode) {
+          fetchedTweets = await getUserTweets(userNode.id, 100)
         } else {
-          setTweets([])
-          setWordCloudData([])
+          setError(`User @${username} not found`)
         }
+      } else if (searchQuery.startsWith("#")) {
+        // Hashtag search
+        const hashtag = searchQuery.substring(1)
+        fetchedTweets = await getTweetsByHashtag(hashtag, 100)
+      } else {
+        // Keyword search
+        fetchedTweets = await searchTweets(searchQuery, 100)
       }
+
+      if (fetchedTweets.length === 0) {
+        setError("No tweets found for your search query")
+        setLoading(false)
+        return
+      }
+
+      // Analyze sentiment
+      const analyzedTweets = await analyzeTweetsSentiment(fetchedTweets)
+      setTweets(analyzedTweets)
+      
+      // Extract key terms for word cloud
+      const terms = extractKeyTerms(analyzedTweets)
+      setWordCloudData(terms)
+      
+      // Calculate overall sentiment
+      const sentiment = calculateOverallSentiment(analyzedTweets)
+      setOverallSentiment(sentiment)
+      
+      // Prepare timeline data
+      const timeline = prepareTimelineData(analyzedTweets)
+      setTimelineData(timeline)
     } catch (err) {
-      console.error("Error loading data:", err)
-      setError("Failed to load Twitter data. Please try again.")
+      console.error("Error analyzing sentiment:", err)
+      setError("An error occurred while analyzing sentiment")
     } finally {
       setLoading(false)
     }
   }
 
-  // Process word cloud data from tweets
-  const processWordCloudData = (analyzedTweets: any[]) => {
-    const wordFrequency: Record<string, { count: number; sentiment: "positive" | "negative" | "neutral" }> = {}
-
-    analyzedTweets.forEach((tweet) => {
-      if (!tweet.sentiment) return
-
-      // Add positive words
-      tweet.sentiment.positive.forEach((word: string) => {
-        if (word.length < 3) return // Skip short words
-        if (!wordFrequency[word]) {
-          wordFrequency[word] = { count: 0, sentiment: "positive" }
+  // Prepare timeline data from tweets
+  const prepareTimelineData = (analyzedTweets: (TwitterTweet & { sentiment: any })[]) => {
+    // Group tweets by date
+    const tweetsByDate = analyzedTweets.reduce((acc, tweet) => {
+      if (!tweet.created_at) return acc
+      
+      const date = new Date(tweet.created_at).toISOString().split('T')[0]
+      if (!acc[date]) {
+        acc[date] = {
+          tweets: [],
+          totalSentiment: 0
         }
-        wordFrequency[word].count++
-      })
-
-      // Add negative words
-      tweet.sentiment.negative.forEach((word: string) => {
-        if (word.length < 3) return // Skip short words
-        if (!wordFrequency[word]) {
-          wordFrequency[word] = { count: 0, sentiment: "negative" }
-        }
-        wordFrequency[word].count++
-      })
-
-      // Add other significant words
-      const words = tweet.text
-        .toLowerCase()
-        .replace(/[^\w\s]/gi, "")
-        .split(/\s+/)
-        .filter(
-          (word: string) =>
-            word.length > 3 && !["https", "http", "the", "and", "for", "that", "this", "with"].includes(word),
-        )
-
-      words.forEach((word: string) => {
-        if (!wordFrequency[word]) {
-          wordFrequency[word] = { count: 0, sentiment: "neutral" }
-        }
-        wordFrequency[word].count++
-      })
-    })
-
-    // Convert to array and sort by frequency
-    const wordCloudArray = Object.entries(wordFrequency)
-      .map(([text, { count, sentiment }]) => ({ text, value: count, sentiment }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 50) // Take top 50 words
-
-    setWordCloudData(wordCloudArray)
+      }
+      
+      acc[date].tweets.push(tweet)
+      acc[date].totalSentiment += tweet.sentiment?.score || 0
+      
+      return acc
+    }, {} as Record<string, { tweets: any[], totalSentiment: number }>)
+    
+    // Convert to array and calculate average sentiment
+    return Object.entries(tweetsByDate)
+      .map(([date, data]) => ({
+        date,
+        sentiment: data.totalSentiment / data.tweets.length,
+        tweets: data.tweets.length
+      }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
   }
 
-  // Handle search
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (searchQuery) {
-      loadData(searchQuery)
+  // Handle key press for search
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleSearch()
     }
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-gray-950 text-white">
-      <div className="container p-4 sm:p-6 lg:p-8">
-        <div className="flex items-center gap-4 mb-6">
-          <Button
-            variant="outline"
-            size="icon"
-            className="border-gray-700 text-gray-400"
-            onClick={() => router.push("/")}
-          >
+    <main className="container mx-auto py-6 px-4 md:px-6">
+      <div className="flex flex-col gap-6">
+        <div className="flex items-center gap-4">
+          <Button variant="outline" size="icon" onClick={() => router.back()}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <h1 className="text-2xl font-bold">Sentiment Analysis</h1>
         </div>
 
-        <form onSubmit={handleSearch} className="relative max-w-md flex mb-6">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
-            <Input
-              type="search"
-              placeholder="Search by Twitter handle..."
-              className="pl-8 bg-gray-800 border-gray-700 text-white"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <Button type="submit" variant="default" size="sm" className="ml-2">
-            Search
+        <div className="flex gap-2">
+          <Input
+            placeholder="Search by @username, #hashtag, or keyword..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyPress={handleKeyPress}
+            className="max-w-md"
+          />
+          <Button onClick={handleSearch} disabled={loading}>
+            {loading ? "Analyzing..." : "Analyze"}
+            {!loading && <Search className="ml-2 h-4 w-4" />}
           </Button>
-        </form>
+        </div>
 
-        {usingSampleData && (
-          <div className="mb-6">
-            <Card className="bg-amber-950/50 border-amber-800 text-amber-300">
-              <CardContent className="p-4 flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                <p>
-                  Using sample data because Twitter API authentication failed. Sentiment analysis may not be accurate.
-                </p>
-              </CardContent>
-            </Card>
-          </div>
+        {error && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mx-auto mb-4"></div>
-              <p className="text-gray-400">Loading sentiment data...</p>
-            </div>
-          </div>
-        ) : error ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center p-4">
-              <p className="text-red-400 mb-2">{error}</p>
-              <Button variant="outline" onClick={() => loadData("VitalikButerin")}>
-                Load Default Data
-              </Button>
-            </div>
-          </div>
-        ) : tweets.length > 0 && selectedUsername ? (
+        {tweets.length > 0 ? (
           <>
-            <SentimentAnalysis
-              tweets={tweets}
-              username={selectedUsername}
-              imageUrl={graphData.nodes.find((node) => node.username === selectedUsername)?.imageUrl}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sentiment Overview</CardTitle>
+                  <CardDescription>
+                    Overall sentiment analysis for {selectedUsername ? `@${selectedUsername}` : searchQuery}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-4">
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <div className="text-sm text-gray-400">Average Sentiment</div>
+                        <div className="text-2xl font-bold">{overallSentiment.averageScore.toFixed(2)}</div>
+                      </div>
+                      <div className="text-4xl">
+                        {getSentimentEmoji(overallSentiment.type)}
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-5 gap-2 mt-4">
+                      {Object.entries(overallSentiment.distribution).map(([type, count]) => (
+                        <div key={type} className="flex flex-col items-center">
+                          <div className="text-xs text-gray-400">{type.replace('-', ' ')}</div>
+                          <div className="text-lg font-bold">{count}</div>
+                          <div className="w-full h-1 mt-1" style={{ backgroundColor: getSentimentColor(type) }}></div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader>
+                  <CardTitle>Key Terms</CardTitle>
+                  <CardDescription>
+                    Most frequent terms colored by sentiment
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <EnhancedWordCloud words={wordCloudData} width={400} height={200} />
+                </CardContent>
+              </Card>
+            </div>
+            
+            <Card>
+              <CardHeader>
+                <CardTitle>Sentiment Timeline</CardTitle>
+                <CardDescription>
+                  How sentiment changes over time
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <SentimentTimeline data={timelineData} height={300} />
+              </CardContent>
+            </Card>
+            
+            <SentimentAnalysis 
+              tweets={tweets} 
+              username={selectedUsername || searchQuery} 
+              imageUrl={selectedUsername ? graphData.nodes.find(n => n.username === selectedUsername)?.imageUrl : undefined} 
             />
-
-            {wordCloudData.length > 0 && (
-              <div className="mt-6">
-                <Card className="bg-gray-900 border-gray-800">
-                  <CardHeader className="px-4 py-3 border-b border-gray-800">
-                    <CardTitle>Word Cloud</CardTitle>
-                    <CardDescription className="text-gray-400">
-                      Common words in tweets colored by sentiment
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="p-4">
-                    <WordCloud words={wordCloudData} width={800} height={400} />
-                  </CardContent>
-                </Card>
-              </div>
-            )}
           </>
         ) : (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center p-4">
-              <p className="text-gray-400 mb-2">
-                No tweets available for sentiment analysis. Try searching for a different Twitter handle.
-              </p>
+          !loading && !error && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <Card className="md:col-span-2">
+                <CardHeader>
+                  <CardTitle>Sentiment Analysis</CardTitle>
+                  <CardDescription>
+                    Analyze sentiment in tweets to understand public opinion
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-center py-12">
+                    <Search className="h-12 w-12 mx-auto text-gray-400 mb-4" />
+                    <p className="text-gray-400">
+                      Search for a Twitter username, hashtag, or keyword to analyze sentiment
+                    </p>
+                    <p className="text-gray-500 text-sm mt-2">
+                      Examples: @elonmusk, #bitcoin, crypto
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader>
+                  <CardTitle>Popular Accounts</CardTitle>
+                  <CardDescription>
+                    Analyze these popular crypto accounts
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-2">
+                    {graphData.nodes.slice(0, 5).map((node) => (
+                      <Button
+                        key={node.id}
+                        variant="outline"
+                        className="justify-start"
+                        onClick={() => {
+                          setSearchQuery(`@${node.username}`)
+                          setSelectedUsername(node.username)
+                          // In a real implementation, you would fetch tweets for this user
+                          // and analyze sentiment
+                        }}
+                      >
+                        <div className="flex flex-col items-start">
+                          <div className="font-medium">{node.name}</div>
+                          <div className="text-xs text-gray-400">@{node.username}</div>
+                        </div>
+                      </Button>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
             </div>
-          </div>
-        )}
-
-        {graphData.nodes.length > 0 && (
-          <div className="mt-6">
-            <Card className="bg-gray-900 border-gray-800">
-              <CardHeader className="px-4 py-3 border-b border-gray-800">
-                <CardTitle>Network Accounts</CardTitle>
-                <CardDescription className="text-gray-400">Select an account to analyze its sentiment</CardDescription>
-              </CardHeader>
-              <CardContent className="p-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                  {graphData.nodes.slice(0, 12).map((node) => (
-                    <Button
-                      key={node.id}
-                      variant="outline"
-                      className={`justify-start h-auto p-3 ${
-                        selectedUsername === node.username ? "bg-gray-800 border-blue-500" : "border-gray-700"
-                      }`}
-                      onClick={() => {
-                        setSelectedUsername(node.username)
-                        // In a real implementation, you would fetch tweets for this user
-                        // and analyze sentiment
-                      }}
-                    >
-                      <div className="flex flex-col items-start">
-                        <div className="font-medium">{node.name}</div>
-                        <div className="text-xs text-gray-400">@{node.username}</div>
-                      </div>
-                    </Button>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          )
         )}
       </div>
     </main>
   )
+}
+
+// Helper function to get sentiment emoji
+function getSentimentEmoji(type: string): string {
+  switch (type) {
+    case "very-negative":
+      return "😡"
+    case "negative":
+      return "😟"
+    case "neutral":
+      return "😐"
+    case "positive":
+      return "🙂"
+    case "very-positive":
+      return "😄"
+    default:
+      return "😐"
+  }
 }
 

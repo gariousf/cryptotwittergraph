@@ -1,6 +1,7 @@
 "use server"
 
 import type { TwitterUser, TwitterFollowing, TwitterResponse, TwitterTweet } from "@/types/twitter"
+import { cache } from "react"
 
 // Twitter API v2 base URL
 const TWITTER_API_BASE = "https://api.twitter.com/2"
@@ -33,17 +34,13 @@ async function fetchFromTwitter<T>(endpoint: string, params: Record<string, stri
   })
 
   try {
-    console.log(`Fetching from Twitter API: ${url.toString()}`)
-
     const response = await fetch(url.toString(), {
       headers: getAuthHeaders(),
       next: { revalidate: 3600 }, // Cache for 1 hour
     })
 
     if (!response.ok) {
-      const errorText = await response.text()
-      console.error(`Twitter API error (${response.status}):`, errorText)
-      throw new Error(`Twitter API error (${response.status}): ${errorText}`)
+      throw new Error(`Twitter API error: ${response.status} ${response.statusText}`)
     }
 
     return response.json()
@@ -58,11 +55,9 @@ async function fetchFromTwitter<T>(endpoint: string, params: Record<string, stri
  */
 export async function checkTwitterCredentials(): Promise<boolean> {
   try {
-    // Try to fetch a simple endpoint to check if credentials are valid
-    await fetchFromTwitter<any>("/users/me")
+    await fetchFromTwitter("/users/me")
     return true
   } catch (error) {
-    console.error("Twitter API credentials check failed:", error)
     return false
   }
 }
@@ -70,62 +65,63 @@ export async function checkTwitterCredentials(): Promise<boolean> {
 /**
  * Get user by username
  */
-export async function getUserByUsername(username: string): Promise<TwitterUser | null> {
+export const getUserByUsername = cache(async (username: string): Promise<TwitterUser | null> => {
   try {
-    const response = await fetchFromTwitter<TwitterResponse<TwitterUser>>(`/users/by/username/${username}`, {
+    const response = await fetchFromTwitter<TwitterResponse<TwitterUser[]>>("/users/by", {
+      usernames: username,
       "user.fields": "description,profile_image_url,public_metrics",
     })
 
-    return response.data
+    return response.data && response.data.length > 0 ? response.data[0] : null
   } catch (error) {
     console.error(`Error fetching user ${username}:`, error)
     return null
   }
-}
+})
 
 /**
  * Get user's following (accounts they follow)
  */
-export async function getUserFollowing(userId: string, maxResults = 100): Promise<TwitterUser[]> {
+export const getUserFollowing = cache(async (userId: string, maxResults = 100): Promise<TwitterUser[]> => {
   try {
-    const response = await fetchFromTwitter<TwitterResponse<TwitterFollowing>>(`/users/${userId}/following`, {
+    const response = await fetchFromTwitter<TwitterFollowing>(`/users/${userId}/following`, {
       max_results: maxResults.toString(),
       "user.fields": "description,profile_image_url,public_metrics",
     })
 
-    return response.data
+    return response.data || []
   } catch (error) {
     console.error(`Error fetching following for user ${userId}:`, error)
     return []
   }
-}
+})
 
 /**
  * Get user's followers
  */
-export async function getUserFollowers(userId: string, maxResults = 100): Promise<TwitterUser[]> {
+export const getUserFollowers = cache(async (userId: string, maxResults = 100): Promise<TwitterUser[]> => {
   try {
-    const response = await fetchFromTwitter<TwitterResponse<TwitterFollowing>>(`/users/${userId}/followers`, {
+    const response = await fetchFromTwitter<TwitterFollowing>(`/users/${userId}/followers`, {
       max_results: maxResults.toString(),
       "user.fields": "description,profile_image_url,public_metrics",
     })
 
-    return response.data
+    return response.data || []
   } catch (error) {
     console.error(`Error fetching followers for user ${userId}:`, error)
     return []
   }
-}
+})
 
 /**
- * Get recent tweets by user
+ * Get user's recent tweets
  */
-export async function getUserTweets(userId: string, maxResults = 100): Promise<TwitterTweet[]> {
+export const getUserTweets = cache(async (userId: string, maxResults = 100): Promise<TwitterTweet[]> => {
   try {
     const response = await fetchFromTwitter<TwitterResponse<TwitterTweet[]>>(`/users/${userId}/tweets`, {
       max_results: maxResults.toString(),
-      "tweet.fields": "created_at,entities,referenced_tweets,public_metrics,context_annotations",
-      expansions: "referenced_tweets.id,referenced_tweets.id.author_id",
+      "tweet.fields": "created_at,public_metrics,entities,referenced_tweets",
+      "expansions": "referenced_tweets.id",
     })
 
     return response.data || []
@@ -133,18 +129,18 @@ export async function getUserTweets(userId: string, maxResults = 100): Promise<T
     console.error(`Error fetching tweets for user ${userId}:`, error)
     return []
   }
-}
+})
 
 /**
- * Get tweets mentioning a user
+ * Get tweets mentioning a username
  */
-export async function getMentioningTweets(username: string, maxResults = 100): Promise<TwitterTweet[]> {
+export const getMentioningTweets = cache(async (username: string, maxResults = 100): Promise<TwitterTweet[]> => {
   try {
     // Search for tweets mentioning the username
     const response = await fetchFromTwitter<TwitterResponse<TwitterTweet[]>>("/tweets/search/recent", {
       query: `@${username}`,
       max_results: maxResults.toString(),
-      "tweet.fields": "created_at,author_id,entities,referenced_tweets",
+      "tweet.fields": "created_at,author_id,entities,referenced_tweets,public_metrics",
     })
 
     return response.data || []
@@ -152,12 +148,12 @@ export async function getMentioningTweets(username: string, maxResults = 100): P
     console.error(`Error fetching mentions for user ${username}:`, error)
     return []
   }
-}
+})
 
 /**
  * Search for users by keyword
  */
-export async function searchUsers(query: string, maxResults = 10): Promise<TwitterUser[]> {
+export const searchUsers = cache(async (query: string, maxResults = 10): Promise<TwitterUser[]> => {
   try {
     const response = await fetchFromTwitter<TwitterResponse<TwitterUser[]>>("/users/search", {
       query: query,
@@ -170,5 +166,44 @@ export async function searchUsers(query: string, maxResults = 10): Promise<Twitt
     console.error(`Error searching users with query ${query}:`, error)
     return []
   }
-}
+})
+
+/**
+ * Search for tweets by keyword
+ */
+export const searchTweets = cache(async (query: string, maxResults = 100): Promise<TwitterTweet[]> => {
+  try {
+    const response = await fetchFromTwitter<TwitterResponse<TwitterTweet[]>>("/tweets/search/recent", {
+      query: query,
+      max_results: maxResults.toString(),
+      "tweet.fields": "created_at,author_id,entities,referenced_tweets,public_metrics",
+    })
+
+    return response.data || []
+  } catch (error) {
+    console.error(`Error searching tweets with query ${query}:`, error)
+    return []
+  }
+})
+
+/**
+ * Get tweets by hashtag
+ */
+export const getTweetsByHashtag = cache(async (hashtag: string, maxResults = 100): Promise<TwitterTweet[]> => {
+  // Remove # if present
+  const cleanHashtag = hashtag.startsWith("#") ? hashtag.substring(1) : hashtag
+  
+  try {
+    const response = await fetchFromTwitter<TwitterResponse<TwitterTweet[]>>("/tweets/search/recent", {
+      query: `#${cleanHashtag}`,
+      max_results: maxResults.toString(),
+      "tweet.fields": "created_at,author_id,entities,referenced_tweets,public_metrics",
+    })
+
+    return response.data || []
+  } catch (error) {
+    console.error(`Error fetching tweets for hashtag ${hashtag}:`, error)
+    return []
+  }
+})
 
