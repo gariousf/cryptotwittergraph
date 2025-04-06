@@ -35,31 +35,43 @@ export interface TwitterResponse<T> {
 export interface TwitterTweet {
   id: string
   text: string
-  created_at: string
-  author_id: string
+  created_at?: string
+  author_id?: string
   public_metrics?: {
     retweet_count: number
     reply_count: number
     like_count: number
     quote_count: number
   }
-  referenced_tweets?: {
-    type: "retweeted" | "quoted" | "replied_to"
-    id: string
-  }[]
   entities?: {
-    mentions?: {
+    mentions?: Array<{
       start: number
       end: number
       username: string
       id: string
-    }[]
+    }>
+    hashtags?: Array<{
+      start: number
+      end: number
+      tag: string
+    }>
+    urls?: Array<{
+      start: number
+      end: number
+      url: string
+      expanded_url: string
+      display_url: string
+    }>
   }
+  referenced_tweets?: Array<{
+    type: "replied_to" | "retweeted" | "quoted"
+    id: string
+  }>
   sentiment?: SentimentResult
 }
 
 // Connection types
-export type ConnectionType = "follows" | "mentioned" | "retweeted" | "replied" | "quoted"
+export type ConnectionType = "follows" | "mentioned" | "retweeted" | "quoted" | "replied"
 
 // Graph data types
 // Add sentiment data to GraphNode

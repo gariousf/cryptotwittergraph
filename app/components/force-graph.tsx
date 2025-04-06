@@ -31,6 +31,15 @@ const communityColors = [
   "#f97316", // orange-500
 ]
 
+// Sentiment color scale
+const sentimentColorScale = {
+  "very-negative": "#ef4444", // red-500
+  "negative": "#f97316", // orange-500
+  "neutral": "#6b7280", // gray-500
+  "positive": "#10b981", // emerald-500
+  "very-positive": "#22c55e", // green-500
+}
+
 // Connection type styles
 const connectionStyles = {
   follows: {
@@ -214,6 +223,10 @@ export function ForceGraph({
       if (nodeColorScheme === "community") {
         const communityId = communities[node.id]
         return communityId !== undefined ? communityColors[communityId % communityColors.length] : "#6b7280" // gray-500 as fallback
+      } else if (nodeColorScheme === "sentiment") {
+        return node.sentiment?.type 
+          ? sentimentColorScale[node.sentiment.type] 
+          : "#6b7280" // Default to gray
       } else {
         return colorScale[node.group as keyof typeof colorScale] || "#6b7280" // gray-500 as fallback
       }
