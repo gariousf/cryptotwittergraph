@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts"
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid } from "recharts"
-import { getSentimentColor, getSentimentEmoji, type SentimentType } from "@/lib/sentiment-service"
+import { getSentimentColor, getSentimentEmoji } from "@/lib/sentiment-utils"
 import { getInitials } from "@/lib/ui-helpers"
+import type { SentimentType } from "@/lib/sentiment-constants"
 import type { TwitterTweet } from "@/types/twitter"
 
 interface SentimentAnalysisProps {

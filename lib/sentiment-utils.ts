@@ -1,5 +1,5 @@
 // Client-side sentiment utilities (no "use server" directive)
-import type { SentimentType } from "./sentiment-service"
+import type { SentimentType } from "./sentiment-constants"
 
 // Sentiment color based on type
 export function getSentimentColor(type: SentimentType | string): string {
