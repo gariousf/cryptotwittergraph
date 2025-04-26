@@ -1,4 +1,6 @@
 import type { SentimentResult } from "@/lib/sentiment-service"
+// Import new NLP types
+import type { DetectedEmotion, AspectSentiment, EnhancedEntity } from "./nlp"
 
 export interface TwitterUser {
   id: string
@@ -62,12 +64,17 @@ export interface TwitterTweet {
       expanded_url: string
       display_url: string
     }>
+    // Add enhanced entities
+    enhanced_entities?: EnhancedEntity[];
   }
   referenced_tweets?: Array<{
     type: "replied_to" | "retweeted" | "quoted"
     id: string
   }>
   sentiment?: SentimentResult
+  // Add advanced NLP results
+  emotions?: DetectedEmotion[];
+  aspect_sentiments?: AspectSentiment[];
 }
 
 // Connection types
@@ -89,6 +96,9 @@ export interface GraphNode {
     type: string
     distribution: Record<string, number>
   }
+  // Optional aggregated emotions/aspects over user's tweets
+  aggregatedEmotions?: Record<CryptoEmotion, number>;
+  aggregatedAspects?: Record<CryptoAspect, { score: number; count: number }>;
 }
 
 export interface GraphLink {

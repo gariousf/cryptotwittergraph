@@ -5,243 +5,176 @@ import { useRouter } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, BarChart2, Users, TrendingUp, UserPlus } from "lucide-react"
+import { ArrowLeft, BarChart2, Users, TrendingUp, UserPlus, AlertTriangle, Bot } from "lucide-react"
 import { TopInfluencers } from "../components/top-influencers"
 import { CommunityDetection } from "../components/community-detection"
-import { TrendAnalysis } from "../components/trend-analysis"
 import { ConnectionRecommendations } from "../components/connection-recommendations"
-import { fetchTwitterGraph } from "../actions"
+import { TrendAnalysis } from "../components/trend-analysis"
 import {
-  getTopInfluencers,
   detectCommunities,
-  analyzeTrends,
   recommendConnections,
-  type NodeAnalytics,
-  type CommunityInfo,
-  type TimeframeData,
-  type RecommendedConnection,
+  analyzeTrends,
+  findTopInfluencers,
 } from "@/lib/analytics-service"
-import type { GraphData, GraphNode } from "@/types/twitter"
+import { generateTradingSignals } from "@/lib/signal-generation-service"
+import { TradingSignalsDisplay } from "../components/trading-signals-display"
+import type { GraphData } from "@/types/twitter"
+import type { NodeAnalytics, CommunityInfo, RecommendedConnection, TimeframeData } from "@/lib/analytics-service"
+import type { TradingSignal } from "@/types/signals"
+import { Skeleton } from "@/components/ui/skeleton"
+import { getSampleGraphData } from "@/lib/sample-data"
 
 export default function AnalyticsPage() {
   const router = useRouter()
-  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] })
-  const [loading, setLoading] = useState(true)
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+  const [graphData, setGraphData] = useState<GraphData | null>(null)
+  const [analytics, setAnalytics] = useState<NodeAnalytics[] | null>(null)
+  const [communities, setCommunities] = useState<CommunityInfo[] | null>(null)
+  const [recommendations, setRecommendations] = useState<RecommendedConnection[] | null>(null)
+  const [trendData, setTrendData] = useState<{ day: TimeframeData[], week: TimeframeData[], month: TimeframeData[] } | null>(null)
+  const [tradingSignals, setTradingSignals] = useState<TradingSignal[] | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  // Analytics state
-  const [topInfluencers, setTopInfluencers] = useState<NodeAnalytics[]>([])
-  const [communities, setCommunities] = useState<CommunityInfo[]>([])
-  const [trends, setTrends] = useState<{
-    day: TimeframeData[]
-    week: TimeframeData[]
-    month: TimeframeData[]
-  }>({
-    day: [],
-    week: [],
-    month: [],
-  })
-  const [recommendations, setRecommendations] = useState<RecommendedConnection[]>([])
-
-  // Load initial data
   useEffect(() => {
-    const loadData = async () => {
-      setLoading(true)
+    const fetchData = async () => {
+      setIsLoading(true)
+      setError(null)
+      let currentAnalytics: NodeAnalytics[] = []
+
       try {
-        const { data } = await fetchTwitterGraph("VitalikButerin", 2)
-        setGraphData(data)
+        const currentGraphData = graphData || getSampleGraphData("sample")
+        setGraphData(currentGraphData)
 
-        // Process analytics
-        const influencers = getTopInfluencers(data, "followers", 20)
-        setTopInfluencers(influencers)
+        const communityResult = await detectCommunities(currentGraphData)
+        setCommunities(communityResult.communities)
+        setAnalytics(communityResult.nodeAnalytics)
+        currentAnalytics = communityResult.nodeAnalytics
 
-        const { communities } = detectCommunities(data)
-        setCommunities(communities)
+        const connectionRecs = await recommendConnections(currentGraphData, currentAnalytics)
+        setRecommendations(connectionRecs)
 
-        const dayTrends = analyzeTrends(data, "day")
-        const weekTrends = analyzeTrends(data, "week")
-        const monthTrends = analyzeTrends(data, "month")
-        setTrends({
-          day: dayTrends,
-          week: weekTrends,
-          month: monthTrends,
-        })
+        const dailyTrends = await analyzeTrends(currentGraphData, 'day')
+        const weeklyTrends = await analyzeTrends(currentGraphData, 'week')
+        const monthlyTrends = await analyzeTrends(currentGraphData, 'month')
+        setTrendData({ day: dailyTrends, week: weeklyTrends, month: monthlyTrends })
 
-        // Set the selected node to the seed node or first node
-        const seedNode = data.nodes.find((node) => node.group === "seed")
-        if (seedNode) {
-          setSelectedNode(seedNode)
-          const nodeRecommendations = recommendConnections(data, seedNode.id, 3)
-          setRecommendations(nodeRecommendations)
+        const signals = await generateTradingSignals(currentGraphData)
+        setTradingSignals(signals)
+
+      } catch (err: any) {
+        console.error("Error loading analytics data:", err)
+        if (err.message && err.message.includes('is not defined')) {
+          setError(`Function not found: ${err.message}. Please check imports in lib/analytics-service.ts.`)
+        } else {
+          setError(err instanceof Error ? err.message : "Failed to load analytics data")
         }
-      } catch (error) {
-        console.error("Error loading data for analytics:", error)
+
+        setAnalytics([])
+        setCommunities([])
+        setRecommendations([])
+        setTrendData({ day: [], week: [], month: [] })
+        setTradingSignals([{
+          id: 'error-signal',
+          timestamp: Date.now(),
+          type: 'NEUTRAL',
+          source: 'System Error',
+          strength: 0,
+          reason: `Failed to load analytics data: ${err instanceof Error ? err.message : "Unknown error"}`,
+        }])
       } finally {
-        setLoading(false)
+        setIsLoading(false)
       }
     }
 
-    loadData()
+    fetchData()
   }, [])
 
-  // Handle node selection
-  const handleNodeSelect = (nodeId: string) => {
-    const node = graphData.nodes.find((n) => n.id === nodeId)
-    if (node) {
-      setSelectedNode(node)
-      const nodeRecommendations = recommendConnections(graphData, nodeId, 3)
-      setRecommendations(nodeRecommendations)
-    }
-  }
-
   return (
-    <main className="flex min-h-screen flex-col bg-gray-950 text-white">
-      <div className="container p-4 sm:p-6 lg:p-8">
-        <div className="flex items-center gap-4 mb-6">
-          <Button
-            variant="outline"
-            size="icon"
-            className="border-gray-700 text-gray-400"
-            onClick={() => router.push("/")}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <h1 className="text-2xl font-bold">Network Analytics</h1>
-        </div>
+    <main className="container mx-auto px-4 py-8">
+      <Button variant="outline" size="sm" onClick={() => router.back()} className="mb-6">
+        <ArrowLeft className="mr-2 h-4 w-4" /> Back
+      </Button>
 
-        {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mx-auto mb-4"></div>
-              <p className="text-gray-400">Loading analytics data...</p>
-            </div>
+      <h1 className="text-3xl font-bold mb-2">Network Analytics</h1>
+      <p className="text-muted-foreground mb-8">
+        Insights into user interactions, community structures, and trends.
+        {graphData?.nodes?.length ? ` Analyzing ${graphData.nodes.length} users and ${graphData.links.length} connections.` : ""}
+      </p>
+
+      {isLoading && (
+        <div className="space-y-6">
+          <Skeleton className="h-12 w-1/4" />
+          <Skeleton className="h-8 w-3/4 mb-8" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Skeleton className="h-[400px] w-full" />
+            <Skeleton className="h-[400px] w-full" />
+            <Skeleton className="h-[400px] w-full" />
+            <Skeleton className="h-[400px] w-full" />
           </div>
-        ) : (
-          <>
-            <div className="grid gap-6 mb-6 md:grid-cols-4">
-              <Card className="bg-gray-900 border-gray-800">
-                <CardContent className="p-6 flex items-center gap-4">
-                  <div className="bg-blue-500/20 p-3 rounded-full">
-                    <Users className="h-6 w-6 text-blue-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-400">Total Accounts</p>
-                    <h3 className="text-2xl font-bold">{graphData.nodes.length}</h3>
-                  </div>
-                </CardContent>
-              </Card>
+        </div>
+      )}
 
-              <Card className="bg-gray-900 border-gray-800">
-                <CardContent className="p-6 flex items-center gap-4">
-                  <div className="bg-emerald-500/20 p-3 rounded-full">
-                    <BarChart2 className="h-6 w-6 text-emerald-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-400">Connections</p>
-                    <h3 className="text-2xl font-bold">{graphData.links.length}</h3>
-                  </div>
-                </CardContent>
-              </Card>
+      {error && (
+         <Card className="border-destructive bg-destructive/10">
+           <CardHeader>
+             <CardTitle className="text-destructive flex items-center gap-2"><AlertTriangle /> Error Loading Data</CardTitle>
+           </CardHeader>
+           <CardContent>
+             <p>{error}</p>
+             <p className="mt-2 text-sm text-muted-foreground">Some components might not display correctly.</p>
+           </CardContent>
+         </Card>
+      )}
 
-              <Card className="bg-gray-900 border-gray-800">
-                <CardContent className="p-6 flex items-center gap-4">
-                  <div className="bg-purple-500/20 p-3 rounded-full">
-                    <Users className="h-6 w-6 text-purple-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-400">Communities</p>
-                    <h3 className="text-2xl font-bold">{communities.length}</h3>
-                  </div>
-                </CardContent>
-              </Card>
+      {!isLoading && !error && analytics && communities && recommendations && trendData && tradingSignals && (
+        <>
+          <div className="mb-8">
+             <TradingSignalsDisplay signals={tradingSignals} />
+          </div>
 
-              <Card className="bg-gray-900 border-gray-800">
-                <CardContent className="p-6 flex items-center gap-4">
-                  <div className="bg-amber-500/20 p-3 rounded-full">
-                    <TrendingUp className="h-6 w-6 text-amber-400" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-400">Engagement</p>
-                    <h3 className="text-2xl font-bold">
-                      {topInfluencers.reduce((sum, node) => sum + node.engagement, 0)}
-                    </h3>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+          <Tabs defaultValue="overview" className="mb-8">
+            <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 mb-4">
+              <TabsTrigger value="overview"><BarChart2 className="mr-2 h-4 w-4" />Overview</TabsTrigger>
+              <TabsTrigger value="communities"><Users className="mr-2 h-4 w-4" />Communities</TabsTrigger>
+              <TabsTrigger value="trends"><TrendingUp className="mr-2 h-4 w-4" />Trends</TabsTrigger>
+              <TabsTrigger value="connections"><UserPlus className="mr-2 h-4 w-4" />Connections</TabsTrigger>
+            </TabsList>
 
-            <Tabs defaultValue="influencers" className="mb-6">
-              <TabsList className="bg-gray-800 mb-4">
-                <TabsTrigger value="influencers" className="data-[state=active]:bg-gray-700">
-                  <BarChart2 className="h-4 w-4 mr-2" />
-                  Top Influencers
-                </TabsTrigger>
-                <TabsTrigger value="communities" className="data-[state=active]:bg-gray-700">
-                  <Users className="h-4 w-4 mr-2" />
-                  Communities
-                </TabsTrigger>
-                <TabsTrigger value="trends" className="data-[state=active]:bg-gray-700">
-                  <TrendingUp className="h-4 w-4 mr-2" />
-                  Trends
-                </TabsTrigger>
-                <TabsTrigger value="recommendations" className="data-[state=active]:bg-gray-700">
-                  <UserPlus className="h-4 w-4 mr-2" />
-                  Recommendations
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="influencers">
-                <TopInfluencers influencers={topInfluencers} onSelectNode={handleNodeSelect} />
-              </TabsContent>
-
-              <TabsContent value="communities">
-                <CommunityDetection communities={communities} onSelectNode={handleNodeSelect} />
-              </TabsContent>
-
-              <TabsContent value="trends">
-                <TrendAnalysis trends={trends} />
-              </TabsContent>
-
-              <TabsContent value="recommendations">
-                {selectedNode ? (
-                  <div className="space-y-4">
-                    <Card className="bg-gray-900 border-gray-800">
-                      <CardHeader className="px-4 py-3 border-b border-gray-800">
-                        <CardTitle>Selected Account</CardTitle>
-                        <CardDescription className="text-gray-400">
-                          Recommendations are based on this account
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="p-4">
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`w-3 h-3 rounded-full ${getBackgroundColorForGroup(selectedNode.group)}`}
-                          ></div>
-                          <div className="font-medium">{selectedNode.name}</div>
-                          <div className="text-sm text-gray-400">@{selectedNode.username}</div>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    <ConnectionRecommendations recommendations={recommendations} onSelectNode={handleNodeSelect} />
-                  </div>
-                ) : (
-                  <Card className="bg-gray-900 border-gray-800">
-                    <CardContent className="p-6 text-center text-gray-400">
-                      Select a node to view recommendations
+            <TabsContent value="overview">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <TopInfluencers influencers={analytics} />
+                 <Card>
+                    <CardHeader>
+                        <CardTitle>Analytics Summary</CardTitle>
+                        <CardDescription>Key metrics from the network.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <p>Total Users: {graphData?.nodes?.length ?? 'N/A'}</p>
+                        <p>Total Connections: {graphData?.links?.length ?? 'N/A'}</p>
+                        <p>Detected Communities: {communities?.length ?? 'N/A'}</p>
                     </CardContent>
-                  </Card>
-                )}
-              </TabsContent>
-            </Tabs>
-          </>
-        )}
-      </div>
+                 </Card>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="communities">
+              <CommunityDetection communities={communities} />
+            </TabsContent>
+
+            <TabsContent value="trends">
+              <TrendAnalysis trends={trendData} />
+            </TabsContent>
+
+            <TabsContent value="connections">
+              <ConnectionRecommendations recommendations={recommendations} />
+            </TabsContent>
+          </Tabs>
+        </>
+      )}
     </main>
   )
 }
 
-// Helper function for styling
 function getBackgroundColorForGroup(group: string): string {
   switch (group) {
     case "seed":
@@ -250,12 +183,18 @@ function getBackgroundColorForGroup(group: string): string {
       return "bg-emerald-500"
     case "project":
       return "bg-blue-500"
-    case "dao":
+    case "exchange":
+      return "bg-yellow-500"
+    case "media":
       return "bg-purple-500"
     case "investor":
-      return "bg-amber-500"
-    case "company":
-      return "bg-indigo-500"
+      return "bg-orange-500"
+    case "developer":
+      return "bg-teal-500"
+    case "community":
+      return "bg-pink-500"
+    case "other":
+      return "bg-gray-500"
     case "kol":
       return "bg-cyan-500"
     default:

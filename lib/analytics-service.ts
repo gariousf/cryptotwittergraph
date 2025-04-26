@@ -502,3 +502,18 @@ export function recommendConnections(data: GraphData, nodeId: string, limit = 5)
   return recommendations
 }
 
+/**
+ * Gets top influencers based on a specific metric.
+ * (This might be part of detectCommunities/calculateNetworkAnalytics or needs to be defined/exported)
+ */
+export function findTopInfluencers(
+    analyticsData: NodeAnalytics[], // Takes analytics data as input
+    metric: keyof Pick<NodeAnalytics, 'followers' | 'engagement' | 'degreeCentrality' | 'betweennessCentrality' | 'closenessCentrality'> = "followers",
+    limit: number = 10
+): NodeAnalytics[] {
+     if (!analyticsData) return [];
+     return [...analyticsData] // Create a copy before sorting
+         .sort((a, b) => (b[metric] ?? 0) - (a[metric] ?? 0)) // Sort descending
+         .slice(0, limit);
+ }
+

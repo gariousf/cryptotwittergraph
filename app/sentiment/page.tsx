@@ -16,6 +16,8 @@ import { getUserTweets, searchTweets, getTweetsByHashtag } from "@/lib/twitter-a
 import { analyzeTweetsSentiment, extractKeyTerms, calculateOverallSentiment } from "@/lib/sentiment-service"
 import type { GraphData, TwitterTweet } from "@/types/twitter"
 import type { SentimentType } from "@/lib/sentiment-service"
+import { Skeleton } from "@/components/ui/skeleton"
+import { SentimentBadge } from "@/app/components/sentiment-badge"
 
 export default function SentimentPage() {
   const router = useRouter()
@@ -30,18 +32,8 @@ export default function SentimentPage() {
   const [overallSentiment, setOverallSentiment] = useState<{
     averageScore: number
     type: SentimentType
-    distribution: Record<string, number>
-  }>({
-    averageScore: 0,
-    type: "neutral",
-    distribution: {
-      "very-negative": 0,
-      "negative": 0,
-      "neutral": 0,
-      "positive": 0,
-      "very-positive": 0
-    }
-  })
+    distribution: Record<SentimentType, number>
+  } | null>(null)
   const [timelineData, setTimelineData] = useState<Array<{
     date: string
     sentiment: number
@@ -161,7 +153,7 @@ export default function SentimentPage() {
   }
 
   return (
-    <main className="container mx-auto py-6 px-4 md:px-6">
+    <main className="container mx-auto py-8 px-4">
       <div className="flex flex-col gap-6">
         <div className="flex items-center gap-4">
           <Button variant="outline" size="icon" onClick={() => router.back()}>
@@ -191,19 +183,23 @@ export default function SentimentPage() {
           </Alert>
         )}
 
-        {tweets.length > 0 ? (
+        {loading && (
+          <div className="text-center py-8">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
+            <p className="mt-4 text-gray-500">Analyzing sentiment...</p>
+          </div>
+        )}
+
+        {!loading && tweets.length > 0 ? (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Sentiment Overview</CardTitle>
-                  <CardDescription>
-                    Overall sentiment analysis for {selectedUsername ? `@${selectedUsername}` : searchQuery}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex flex-col gap-4">
-                    <div className="flex justify-between items-center">
+            <Card className="mb-8 bg-gradient-to-r from-gray-800 to-gray-900 text-white shadow-lg">
+              <CardHeader>
+                <CardTitle>Overall Sentiment Summary</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-around">
+                  {overallSentiment ? (
+                    <>
                       <div>
                         <div className="text-sm text-gray-400">Average Sentiment</div>
                         <div className="text-2xl font-bold">{overallSentiment.averageScore.toFixed(2)}</div>
@@ -211,32 +207,47 @@ export default function SentimentPage() {
                       <div className="text-4xl">
                         {getSentimentEmoji(overallSentiment.type)}
                       </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-5 gap-2 mt-4">
-                      {Object.entries(overallSentiment.distribution).map(([type, count]) => (
-                        <div key={type} className="flex flex-col items-center">
-                          <div className="text-xs text-gray-400">{type.replace('-', ' ')}</div>
-                          <div className="text-lg font-bold">{count}</div>
-                          <div className="w-full h-1 mt-1" style={{ backgroundColor: getSentimentColor(type) }}></div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card>
-                <CardHeader>
-                  <CardTitle>Key Terms</CardTitle>
-                  <CardDescription>
-                    Most frequent terms colored by sentiment
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <EnhancedWordCloud words={wordCloudData} width={400} height={200} />
-                </CardContent>
-              </Card>
+                      <div>
+                        <div className="text-sm text-gray-400">Overall Type</div>
+                        <SentimentBadge type={overallSentiment.type} className="text-lg capitalize" />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <Skeleton className="h-4 w-24 mb-1 bg-gray-700" />
+                        <Skeleton className="h-8 w-16 bg-gray-600" />
+                      </div>
+                      <Skeleton className="h-10 w-10 rounded-full bg-gray-600" />
+                      <div>
+                        <Skeleton className="h-4 w-20 mb-1 bg-gray-700" />
+                        <Skeleton className="h-8 w-28 bg-gray-600" />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+              {overallSentiment && (
+                <SentimentAnalysis
+                  averageScore={overallSentiment.averageScore}
+                  type={overallSentiment.type}
+                  distribution={overallSentiment.distribution}
+                />
+              )}
+              {wordCloudData.length > 0 && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Sentiment Word Cloud</CardTitle>
+                    <CardDescription>Most frequent words colored by sentiment</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <EnhancedWordCloud words={wordCloudData} width={400} height={200} />
+                  </CardContent>
+                </Card>
+              )}
             </div>
             
             <Card>

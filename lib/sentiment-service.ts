@@ -4,6 +4,8 @@ import Sentiment from "sentiment"
 import type { TwitterTweet } from "@/types/twitter"
 import { cache } from "react"
 import { SENTIMENT_RANGES, type SentimentType } from "./sentiment-constants"
+// Import new NLP types
+import type { DetectedEmotion, AspectSentiment, CryptoEmotion, CryptoAspect, EnhancedEntity } from "@/types/nlp"
 
 // Initialize sentiment analyzer
 const sentiment = new Sentiment()
@@ -38,14 +40,38 @@ sentiment.registerLanguage('en', {
   }
 })
 
-// Sentiment result interface
-export interface SentimentResult {
-  score: number
-  comparative: number
-  type: SentimentType
-  positive: string[]
-  negative: string[]
+// Define the primary result structure, incorporating basic and advanced analysis
+export interface FullSentimentAnalysisResult {
+  // Basic Sentiment
+  score: number; // Overall sentiment score (-inf, +inf)
+  comparative: number; // Comparative score per word
+  type: SentimentType; // Classified type (very-negative, etc.)
+  positiveWords: string[];
+  negativeWords: string[];
+
+  // Fine-grained Emotions
+  emotions?: DetectedEmotion[];
+
+  // Aspect-Based Sentiment
+  aspects?: AspectSentiment[];
+
+  // Potentially add dominant emotion/aspect here if calculated
+  dominantEmotion?: CryptoEmotion;
+  keyAspect?: CryptoAspect;
 }
+
+// Update the existing SentimentResult type if needed, or keep it separate
+// For simplicity, let's keep the existing SentimentResult for basic use cases
+// and use FullSentimentAnalysisResult where advanced details are needed.
+export type SentimentResult = {
+  score: number;
+  comparative: number;
+  type: SentimentType;
+  positive: string[];
+  negative: string[];
+}
+
+const NLP_API_URL = process.env.NLP_MICROSERVICE_URL; // Get URL from env
 
 // Analyze sentiment of a single text
 export async function analyzeSentiment(text: string): Promise<SentimentResult> {
@@ -203,5 +229,107 @@ export async function calculateOverallSentiment(tweets: (TwitterTweet & { sentim
     type,
     distribution,
   }
+}
+
+// Placeholder function - Ensure it exists and is exported
+// If this function was removed/renamed, update the imports in signal-generation-service.ts
+export async function getSentimentTimeline(windowKey: string): Promise<any> { // Replace 'any' with actual return type
+    console.log(`Placeholder: Fetching sentiment timeline for window: ${windowKey}`);
+    // Dummy data structure - adapt based on actual needs/implementation
+    return {
+        timeline: [
+            { timestamp: windowKey, averageScore: Math.random() * 2 - 1, type: 'neutral' }
+        ]
+    };
+}
+
+/**
+ * Performs full sentiment analysis by calling the NLP microservice.
+ */
+export const performFullSentimentAnalysis = cache(async (text: string): Promise<FullSentimentAnalysisResult> => {
+    console.log(`Requesting full analysis for text: "${text.substring(0, 50)}..."`);
+    const result = await callNlpService<{
+        sentiment: SentimentResult; // Assuming service returns basic sentiment too
+        emotions: DetectedEmotion[];
+        aspects: AspectSentiment[];
+        // Assuming entities are also returned by this endpoint for efficiency
+        entities?: EnhancedEntity[];
+    }>('/analyze_text', { text });
+
+    if (!result) {
+        console.warn("NLP service call failed or returned null. Falling back to basic local sentiment.");
+        // Fallback to basic sentiment analysis only
+        const basicResult = await analyzeSentiment(text); // Keep your local basic one as fallback
+        return {
+            ...basicResult,
+            positiveWords: basicResult.positive,
+            negativeWords: basicResult.negative,
+            emotions: [],
+            aspects: [],
+        };
+    }
+
+     // Find dominant emotion (highest score) - Moved logic here from placeholder
+     const dominantEmotion = result.emotions?.length > 0
+     ? result.emotions.reduce((max, e) => e.score > max.score ? e : max, result.emotions[0]).emotion
+     : undefined;
+
+      // Find key aspect - Moved logic here from placeholder
+      const keyAspect = result.aspects?.length > 0
+          ? result.aspects.find(a => a.sentiment.type !== 'neutral')?.aspect || result.aspects[0].aspect
+          : undefined;
+
+
+    // Combine results (assuming the API returns components separately)
+    return {
+        // Use sentiment details from the service if provided, else fallback needed
+        score: result.sentiment?.score ?? 0,
+        comparative: result.sentiment?.comparative ?? 0,
+        type: result.sentiment?.type ?? 'neutral',
+        positiveWords: result.sentiment?.positive ?? [],
+        negativeWords: result.sentiment?.negative ?? [],
+        emotions: result.emotions ?? [],
+        aspects: result.aspects ?? [],
+        dominantEmotion: dominantEmotion,
+        keyAspect: keyAspect,
+        // Note: We might need to adjust the expected response structure from /analyze_text
+    };
+});
+
+async function callNlpService<T>(endpoint: string, body: any): Promise<T | null> {
+    if (!NLP_API_URL) {
+        console.error("NLP_MICROSERVICE_URL environment variable is not set.");
+        // Return a default/error state appropriate for the expected type T
+        // This is tricky without knowing T, throwing might be better in some cases.
+        // For now, return null and let callers handle it.
+        return null;
+    }
+
+    try {
+        console.log(`Calling NLP service: ${NLP_API_URL}${endpoint}`);
+        const response = await fetch(`${NLP_API_URL}${endpoint}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                // Add any necessary auth headers if your service requires them
+            },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.text();
+            console.error(`NLP service error (${response.status}): ${errorBody}`);
+            // Depending on the expected type T, return a default or null
+            return null;
+        }
+
+        const data = await response.json();
+        console.log(`NLP service response for ${endpoint}:`, data); // Log the raw response
+        return data as T;
+    } catch (error) {
+        console.error(`Failed to fetch from NLP service (${endpoint}):`, error);
+         // Depending on the expected type T, return a default or null
+        return null;
+    }
 }
 

@@ -1,534 +1,381 @@
 "use client"
 
-import type React from "react"
-
-import { useState, useEffect } from "react"
-// Add the Smile icon import
-import { Search, Filter, Zap, AlertTriangle, BarChart2, Smile } from "lucide-react"
+import React, { useState, useEffect, useRef, useCallback } from "react"
+import Link from "next/link"
+// Import UI components individually
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Slider } from "@/components/ui/slider"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import { ForceGraph } from "./components/force-graph"
-import { VisualizationControls } from "./components/visualization-controls"
-import { fetchTwitterGraph } from "./actions"
-import type { GraphData, GraphNode, GraphLink, ConnectionType } from "@/types/twitter"
-import type { LayoutType, NodeSizeMetric, NodeColorScheme } from "./components/force-graph"
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { useRouter } from "next/navigation"
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
+// Other imports
+import { fetchTwitterGraph } from "@/app/actions"
+// Import types from the component file where they are defined and exported
+import { ForceGraph, type LayoutType, type NodeSizeMetric, type NodeColorScheme } from "@/app/components/force-graph"
+import { VisualizationControls } from "@/app/components/visualization-controls"
+import {
+    GraphData,
+    GraphNode,
+    GraphLink,
+    ConnectionType
+} from "@/types/twitter"
+// Ensure ALL used icons are imported, including Loader2
+import { AlertTriangle, User, Users, Link as LinkIcon, Settings, Minimize2, Maximize2, Search, Zap, Loader2 } from "lucide-react"
+import { getBorderColorForGroup, getBackgroundColorForGroup, getTextColorForGroup, getInitials, formatNumber, capitalizeFirstLetter } from "@/lib/ui-helpers"
 
 export default function Home() {
-  const router = useRouter()
-  const [searchQuery, setSearchQuery] = useState("")
-  const [connectionDepth, setConnectionDepth] = useState([1])
-  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] })
-  const [loading, setLoading] = useState(false)
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [usingSampleData, setUsingSampleData] = useState(false)
+    const [username, setUsername] = useState("")
+    const [depth, setDepth] = useState(1) // Default depth 1
+    const [graphData, setGraphData] = useState<GraphData | null>(null)
+    const [isLoading, setIsLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const [usingSampleData, setUsingSampleData] = useState(false)
+    const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
+    const [selectedNodeConnections, setSelectedNodeConnections] = useState<GraphLink[] | null>(null)
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+    const [isFullScreen, setIsFullScreen] = useState(false)
 
-  // Visualization options
-  const [layout, setLayout] = useState<LayoutType>("force")
-  const [nodeSizeMetric, setNodeSizeMetric] = useState<NodeSizeMetric>("followers")
-  const [nodeColorScheme, setNodeColorScheme] = useState<NodeColorScheme>("group")
+    // Visualization settings state
+    const [layout, setLayout] = useState<LayoutType>("force")
+    const [nodeSizeMetric, setNodeSizeMetric] = useState<NodeSizeMetric>("followers")
+    const [nodeColorScheme, setNodeColorScheme] = useState<NodeColorScheme>("group")
 
-  // Function to load graph data
-  const loadGraphData = async (username: string, depth: number) => {
-    if (!username) return
+    const mainContainerRef = useRef<HTMLDivElement>(null);
 
-    setLoading(true)
-    setError(null)
 
-    try {
-      const { data, usingSampleData } = await fetchTwitterGraph(username, depth)
-      setGraphData(data)
-      setUsingSampleData(usingSampleData)
+    const loadGraphData = async (searchUsername: string, searchDepth: number) => {
+        if (!searchUsername.trim()) return
 
-      // Select the seed node if available
-      if (data.nodes.length > 0) {
-        const seedNode = data.nodes.find((node) => node.group === "seed")
-        setSelectedNode(seedNode || data.nodes[0])
-      }
-    } catch (err) {
-      console.error("Error loading graph data:", err)
-      setError("Failed to load Twitter data. Please try again.")
-    } finally {
-      setLoading(false)
-    }
-  }
+        setIsLoading(true)
+        setError(null)
+        setGraphData(null)
+        setSelectedNode(null)
+        setSelectedNodeConnections(null)
+        setIsSidebarOpen(false)
+        setUsingSampleData(false)
 
-  // Handle search submission
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (searchQuery) {
-      loadGraphData(searchQuery, connectionDepth[0])
-    }
-  }
-
-  // Handle node click
-  const handleNodeClick = (nodeId: string) => {
-    const node = graphData.nodes.find((n) => n.id === nodeId)
-    if (node) {
-      setSelectedNode(node)
-    }
-  }
-
-  // Get connections for the selected node
-  const getNodeConnections = () => {
-    if (!selectedNode || !graphData.links.length) return []
-
-    const connections: Array<GraphLink & { node: GraphNode }> = []
-    const nodeMap = new Map(graphData.nodes.map((node) => [node.id, node]))
-
-    // Find all links where the selected node is source or target
-    graphData.links.forEach((link) => {
-      if (link.source === selectedNode.id || (typeof link.source === "object" && link.source.id === selectedNode.id)) {
-        // Find the target node
-        const targetId = typeof link.target === "object" ? link.target.id : link.target
-        const targetNode = nodeMap.get(targetId)
-
-        if (targetNode) {
-          connections.push({
-            ...link,
-            node: targetNode,
-            // Ensure source is a string for consistent handling
-            source: typeof link.source === "object" ? link.source.id : link.source,
-          })
+        try {
+            const result = await fetchTwitterGraph(searchUsername, searchDepth)
+            if (!result || !result.data || result.data.nodes.length === 0) {
+                throw new Error("No graph data returned. The user might not exist or have connections.")
+            }
+            setGraphData(result.data)
+            setUsingSampleData(result.usingSampleData)
+            if (result.usingSampleData) {
+                setError("Could not fetch live data, showing sample graph.")
+            }
+        } catch (err: any) {
+            console.error("Error fetching graph data:", err)
+            setError(err.message || "An error occurred while fetching data.")
+            // Optionally load sample data on error
+            // const sampleData = getSampleGraphData(searchUsername);
+            // setGraphData(sampleData);
+            // setUsingSampleData(true);
+        } finally {
+            setIsLoading(false)
         }
-      } else if (
-        link.target === selectedNode.id ||
-        (typeof link.target === "object" && link.target.id === selectedNode.id)
-      ) {
-        // Find the source node
-        const sourceId = typeof link.source === "object" ? link.source.id : link.source
-        const sourceNode = nodeMap.get(sourceId)
-
-        if (sourceNode) {
-          connections.push({
-            ...link,
-            node: sourceNode,
-            // Ensure source is a string for consistent handling
-            source: typeof link.source === "object" ? link.source.id : link.source,
-          })
-        }
-      }
-    })
-
-    return connections
-  }
-
-  // Load initial data with a default crypto Twitter account
-  useEffect(() => {
-    loadGraphData("VitalikButerin", connectionDepth[0])
-  }, [])
-
-  // Update graph when depth changes
-  useEffect(() => {
-    if (searchQuery) {
-      loadGraphData(searchQuery, connectionDepth[0])
     }
-  }, [connectionDepth])
 
-  return (
-    <main className="flex min-h-screen flex-col bg-gray-950 text-white">
-      <header className="border-b border-gray-800 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="container flex h-16 items-center px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-2 mr-4">
-            <Zap className="h-6 w-6 text-emerald-400" />
-            <h1 className="text-xl font-bold">CryptoGraph</h1>
-          </div>
-          <form onSubmit={handleSearch} className="relative flex-1 max-w-md flex">
-            <div className="relative flex-1">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-gray-500" />
-              <Input
-                type="search"
-                placeholder="Search by Twitter handle..."
-                className="pl-8 bg-gray-800 border-gray-700 text-white"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-            <Button type="submit" variant="default" size="sm" className="ml-2">
-              Search
-            </Button>
-          </form>
-          <Button
-            variant="outline"
-            size="icon"
-            className="ml-2 border-gray-700 text-gray-400"
-            onClick={() => router.push("/analytics")}
-          >
-            <BarChart2 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="outline"
-            size="icon"
-            className="ml-2 border-gray-700 text-gray-400"
-            onClick={() => router.push("/sentiment")}
-          >
-            <Smile className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="icon" className="ml-2 border-gray-700 text-gray-400">
-            <Filter className="h-4 w-4" />
-          </Button>
-        </div>
-      </header>
+    const handleSearch = (e: React.FormEvent) => {
+        e.preventDefault()
+        const trimmedUsername = username.trim()
+        if (trimmedUsername) {
+            loadGraphData(trimmedUsername, depth)
+        }
+    }
 
-      <div className="container grid flex-1 gap-4 p-4 sm:p-6 lg:p-8 md:grid-cols-3">
-        {usingSampleData && (
-          <div className="md:col-span-3 mb-2">
-            <Alert variant="warning" className="bg-amber-950/50 border-amber-800 text-amber-300">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription>
-                Using sample data because Twitter API authentication failed. Check your API credentials.
-              </AlertDescription>
-            </Alert>
-          </div>
-        )}
+    const handleNodeClick = useCallback((nodeId: string) => {
+        if (!graphData) return
+        const node = graphData.nodes.find((n) => n.id === nodeId)
+        if (node) {
+            setSelectedNode(node)
+            // Find connections involving this node
+            const connections = graphData.links.filter(
+                (link) => link.source === nodeId || link.target === nodeId
+            );
+            setSelectedNodeConnections(connections)
+            setIsSidebarOpen(true) // Open sidebar when node is clicked
+        } else {
+            setSelectedNode(null)
+            setSelectedNodeConnections(null)
+            setIsSidebarOpen(false)
+        }
+    }, [graphData]) // Dependency on graphData
 
-        <div className="md:col-span-2">
-          <Card className="bg-gray-900 border-gray-800 overflow-hidden">
-            <CardHeader className="border-b border-gray-800 px-4 py-3">
-              <CardTitle>Network Visualization</CardTitle>
-              <CardDescription className="text-gray-400">
-                {graphData.nodes.length
-                  ? `Showing ${graphData.nodes.length} accounts and ${graphData.links.length} connections`
-                  : "Search for a Twitter handle to visualize their network"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="p-0 aspect-square relative">
-              {loading ? (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500 mx-auto mb-4"></div>
-                    <p className="text-gray-400">Loading Twitter data...</p>
-                  </div>
-                </div>
-              ) : error ? (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center p-4">
-                    <p className="text-red-400 mb-2">{error}</p>
-                    <Button variant="outline" onClick={() => loadGraphData("VitalikButerin", connectionDepth[0])}>
-                      Load Default Data
+    const getNodeConnections = () => {
+        if (!selectedNode || !graphData) return [];
+        return graphData.links.filter(link => link.source === selectedNode.id || link.target === selectedNode.id);
+    };
+
+    const getConnectedNode = (link: GraphLink): GraphNode | undefined => {
+         if (!graphData || !selectedNode) return undefined;
+         const targetId = link.source === selectedNode.id ? link.target : link.source;
+         return graphData.nodes.find(node => node.id === targetId);
+    };
+
+    const toggleFullScreen = () => {
+         const elem = mainContainerRef.current;
+         if (!elem) return;
+
+         if (!document.fullscreenElement) {
+           elem.requestFullscreen().catch(err => {
+             alert(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+           });
+           setIsFullScreen(true);
+         } else {
+           if (document.exitFullscreen) {
+             document.exitFullscreen();
+             setIsFullScreen(false);
+           }
+         }
+    };
+
+     useEffect(() => {
+       const handleFullscreenChange = () => {
+         setIsFullScreen(!!document.fullscreenElement);
+       };
+       document.addEventListener('fullscreenchange', handleFullscreenChange);
+       return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+     }, []);
+
+
+    return (
+        <div ref={mainContainerRef} className={`flex flex-col h-screen bg-gray-950 text-gray-100 ${isFullScreen ? 'bg-gray-950' : ''}`}>
+            {/* Header Section */}
+            {!isFullScreen && (
+                 <header className="p-4 border-b border-gray-800">
+                    <div className="container mx-auto flex flex-wrap items-center justify-between gap-4">
+                         <h1 className="text-2xl font-bold flex items-center gap-2">
+                           {/* <Zap className="h-6 w-6 text-emerald-400" /> Replaced */}
+                           UFind
+                        </h1>
+                        <form onSubmit={handleSearch} className="flex items-center gap-2 flex-grow md:flex-grow-0">
+                            <Input
+                                type="text"
+                                placeholder="@username or username"
+                                value={username}
+                                onChange={(e) => setUsername(e.target.value)}
+                                className="bg-gray-800 border-gray-700 text-white placeholder-gray-500 focus:ring-emerald-500 focus:border-emerald-500 w-full md:w-64"
+                                required
+                            />
+                             <div className="flex items-center gap-2">
+                                 <Label htmlFor="depth-select" className="text-sm text-gray-400 whitespace-nowrap">Depth:</Label>
+                                 <Select
+                                     value={String(depth)}
+                                     onValueChange={(value) => setDepth(Number(value))}
+                                 >
+                                     <SelectTrigger id="depth-select" className="w-[70px] bg-gray-800 border-gray-700 h-10">
+                                         <SelectValue placeholder="Depth" />
+                                     </SelectTrigger>
+                                     <SelectContent>
+                                         <SelectItem value="1">1</SelectItem>
+                                         <SelectItem value="2">2</SelectItem>
+                                         <SelectItem value="3">3</SelectItem>
+                                     </SelectContent>
+                                 </Select>
+                             </div>
+                            <Button type="submit" variant="secondary" disabled={isLoading}>
+                                {isLoading ? "Loading..." : <Search className="h-4 w-4 mr-2" />}
+                                Search
+                            </Button>
+                        </form>
+                    </div>
+                 </header>
+            )}
+
+             {/* Main Content Area */}
+            <div className="flex flex-1 overflow-hidden relative">
+                {/* Graph Area */}
+                <div className={`flex-1 relative ${isSidebarOpen ? 'w-3/4' : 'w-full'} transition-all duration-300 ease-in-out`}>
+                    {isLoading && (
+                         <div className="absolute inset-0 flex items-center justify-center bg-gray-900/50 z-10">
+                             <div className="text-center">
+                                 <Loader2 className="h-12 w-12 animate-spin text-emerald-400 mx-auto mb-4" />
+                                 <p className="text-lg font-medium">Loading graph data...</p>
+                                 <p className="text-sm text-gray-400">Fetching connections for @{username}</p>
+                             </div>
+                         </div>
+                    )}
+                    {error && !isLoading && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 z-10">
+                            <Card className="w-full max-w-md bg-gray-800 border-red-500/50">
+                                <CardHeader>
+                                    <CardTitle className="text-red-400 flex items-center gap-2">
+                                        <AlertTriangle className="h-5 w-5" /> Error Fetching Data
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                    <p className="text-sm text-gray-300">{error}</p>
+                                    {usingSampleData && <p className="text-sm text-amber-400 mt-2">Displaying sample data instead.</p>}
+                                     <p className="text-xs text-gray-500 mt-4">
+                                         This could be due to Twitter API limits, an invalid username, or network issues.
+                                         Please check the username and try again later. Deeper searches (Depth > 1) are more likely to hit rate limits.
+                                     </p>
+                                </CardContent>
+                                 <CardFooter>
+                                      <Button variant="secondary" onClick={() => setError(null)}>Dismiss</Button>
+                                 </CardFooter>
+                            </Card>
+                        </div>
+                    )}
+                    {!isLoading && graphData && graphData.nodes.length > 0 && (
+                         <>
+                            <ForceGraph
+                                data={graphData}
+                                layout={layout}
+                                nodeSizeMetric={nodeSizeMetric}
+                                nodeColorScheme={nodeColorScheme}
+                                onNodeClick={handleNodeClick}
+                            />
+                             {/* Controls Overlay */}
+                            <div className={`absolute top-2 left-2 bg-gray-900/70 p-3 rounded-lg backdrop-blur-sm shadow-lg transition-opacity duration-300 ${isFullScreen ? 'opacity-30 hover:opacity-100' : ''}`}>
+                                 <VisualizationControls
+                                     layout={layout}
+                                     nodeSizeMetric={nodeSizeMetric}
+                                     nodeColorScheme={nodeColorScheme}
+                                     onLayoutChange={setLayout}
+                                     onNodeSizeMetricChange={setNodeSizeMetric}
+                                     onNodeColorSchemeChange={setNodeColorScheme}
+                                 />
+                            </div>
+                         </>
+                    )}
+                    {!isLoading && !graphData && !error && (
+                        <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="text-center p-8 border border-dashed border-gray-700 rounded-lg">
+                                 <Zap className="h-16 w-16 text-gray-600 mx-auto mb-4" />
+                                <h2 className="text-xl font-semibold text-gray-400">Welcome to UFind</h2> {/* Replaced */}
+                                <p className="text-gray-500 mt-2">
+                                    Enter a Twitter/X username and select a search depth <br /> to visualize their social network connections.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                    {/* Fullscreen Toggle */}
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={toggleFullScreen}
+                        className={`absolute top-2 right-2 text-gray-400 hover:text-white bg-gray-900/50 hover:bg-gray-800/70 transition-opacity duration-300 ${isFullScreen ? 'opacity-30 hover:opacity-100' : ''}`}
+                        title={isFullScreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                     >
+                        {isFullScreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
                     </Button>
-                  </div>
                 </div>
-              ) : graphData.nodes.length === 0 ? (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center p-4">
-                    <p className="text-gray-400 mb-2">
-                      No data available. Search for a Twitter handle to visualize their network.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <ForceGraph
-                  data={graphData}
-                  onNodeClick={handleNodeClick}
-                  layout={layout}
-                  nodeSizeMetric={nodeSizeMetric}
-                  nodeColorScheme={nodeColorScheme}
-                />
-              )}
-            </CardContent>
-          </Card>
+
+                {/* Sidebar */}
+                <aside className={`bg-gray-900 border-l border-gray-800 transition-all duration-300 ease-in-out overflow-y-auto ${isSidebarOpen ? 'w-1/4 min-w-[350px] p-4' : 'w-0 p-0 overflow-hidden'}`}>
+                    {isSidebarOpen && selectedNode && (
+                        <div>
+                            <Button variant="ghost" size="sm" onClick={() => setIsSidebarOpen(false)} className="mb-4 float-right">Close</Button>
+                            <div className="flex items-center gap-4 mb-4">
+                                <Avatar className={`h-16 w-16 border-2 ${getBorderColorForGroup(selectedNode.group)}`}>
+                                    <AvatarImage src={selectedNode.imageUrl} alt={selectedNode.name} />
+                                    <AvatarFallback className={`${getBackgroundColorForGroup(selectedNode.group)} ${getTextColorForGroup(selectedNode.group)} text-xl`}>
+                                        {getInitials(selectedNode.name)}
+                                    </AvatarFallback>
+                                </Avatar>
+                                <div>
+                                    <h3 className="text-lg font-bold">{selectedNode.name}</h3>
+                                    <Link href={`https://twitter.com/${selectedNode.username}`} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-400 hover:underline">
+                                        @{selectedNode.username}
+                                    </Link>
+                                    <div className="flex items-center gap-2 mt-1">
+                                         <Badge variant="secondary" className={`${getBackgroundColorForGroup(selectedNode.group)} ${getTextColorForGroup(selectedNode.group)} border-none`}>
+                                            {capitalizeFirstLetter(selectedNode.group)}
+                                        </Badge>
+                                         <span className="text-xs text-gray-400 flex items-center gap-1" title="Followers">
+                                             <Users className="h-3 w-3" /> {formatNumber(selectedNode.followers)}
+                                         </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <p className="text-sm text-gray-400 mb-4">{selectedNode.description || "No description available."}</p>
+
+                            <h4 className="font-semibold mb-2 text-gray-300 border-b border-gray-700 pb-1">Connections ({selectedNodeConnections?.length ?? 0})</h4>
+                            <ScrollArea className="h-[calc(100vh-300px)] pr-2"> {/* Adjust height as needed */}
+                                {selectedNodeConnections && selectedNodeConnections.length > 0 ? (
+                                    <ul className="space-y-3">
+                                        {selectedNodeConnections.map((link, index) => {
+                                            const connectedNode = getConnectedNode(link);
+                                            if (!connectedNode) return null; // Skip if connected node not found
+                                            const isSource = link.source === selectedNode.id;
+                                            return (
+                                                <li key={`${link.source}-${link.target}-${link.type}-${index}`} className="flex items-center gap-3 p-2 rounded hover:bg-gray-800">
+                                                    <Avatar className={`h-8 w-8 border ${getBorderColorForGroup(connectedNode.group)}`}>
+                                                        <AvatarImage src={connectedNode.imageUrl} alt={connectedNode.name} />
+                                                        <AvatarFallback className={`${getBackgroundColorForGroup(connectedNode.group)} ${getTextColorForGroup(connectedNode.group)} text-xs`}>
+                                                             {getInitials(connectedNode.name)}
+                                                        </AvatarFallback>
+                                                    </Avatar>
+                                                    <div className="flex-1 overflow-hidden">
+                                                        <div className="text-sm font-medium truncate">{connectedNode.name}</div>
+                                                         <Link href={`https://twitter.com/${connectedNode.username}`} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline truncate block">
+                                                            @{connectedNode.username}
+                                                        </Link>
+                                                    </div>
+                                                    <TooltipProvider delayDuration={100}>
+                                                        <Tooltip>
+                                                            <TooltipTrigger>
+                                                                <Badge variant="outline" className={`text-xs ${getConnectionTypeBadgeClass(link.type)}`}>
+                                                                     {isSource ? '→' : '←'} {getConnectionTypeLabel(link.type)} {link.count && link.count > 1 ? `(${link.count})` : ''}
+                                                                </Badge>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent>
+                                                                <p>{isSource ? `${selectedNode.username} ${link.type} ${connectedNode.username}` : `${connectedNode.username} ${link.type} ${selectedNode.username}`}</p>
+                                                                 {link.timestamp && <p className="text-xs text-gray-400">Last: {new Date(link.timestamp).toLocaleDateString()}</p>}
+                                                            </TooltipContent>
+                                                        </Tooltip>
+                                                    </TooltipProvider>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                ) : (
+                                    <p className="text-sm text-gray-500">No connections to display for this node in the current graph.</p>
+                                )}
+                            </ScrollArea>
+                        </div>
+                    )}
+                </aside>
+            </div>
         </div>
-
-        <div className="space-y-4">
-          <Card className="bg-gray-900 border-gray-800">
-            <CardHeader className="px-4 py-3">
-              <CardTitle>Graph Controls</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-sm font-medium">Connection Depth</span>
-                    <span className="text-sm text-gray-400">{connectionDepth[0]}</span>
-                  </div>
-                  <Slider
-                    value={connectionDepth}
-                    min={1}
-                    max={2} // Limiting to 2 to avoid rate limits
-                    step={1}
-                    onValueChange={setConnectionDepth}
-                    disabled={loading}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Higher depth values will show more connections but take longer to load.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <VisualizationControls
-            layout={layout}
-            nodeSizeMetric={nodeSizeMetric}
-            nodeColorScheme={nodeColorScheme}
-            onLayoutChange={setLayout}
-            onNodeSizeMetricChange={setNodeSizeMetric}
-            onNodeColorSchemeChange={setNodeColorScheme}
-          />
-
-          <Card className="bg-gray-900 border-gray-800">
-            <CardHeader className="px-4 py-3 border-b border-gray-800">
-              <CardTitle>Account Details</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <Tabs defaultValue="profile">
-                <TabsList className="grid grid-cols-2 bg-gray-800">
-                  <TabsTrigger value="profile">Profile</TabsTrigger>
-                  <TabsTrigger value="connections">Connections</TabsTrigger>
-                </TabsList>
-                <TabsContent value="profile" className="p-4">
-                  {loading ? (
-                    <div className="flex items-start gap-4">
-                      <Skeleton className="h-16 w-16 rounded-full" />
-                      <div className="space-y-2">
-                        <Skeleton className="h-4 w-32" />
-                        <Skeleton className="h-3 w-24" />
-                        <div className="mt-2 flex gap-3">
-                          <Skeleton className="h-3 w-20" />
-                          <Skeleton className="h-3 w-20" />
-                        </div>
-                      </div>
-                    </div>
-                  ) : selectedNode ? (
-                    <div className="flex items-start gap-4">
-                      <Avatar className={`h-16 w-16 border-2 ${getBorderColorForGroup(selectedNode.group)}`}>
-                        {selectedNode.imageUrl ? (
-                          <AvatarImage src={selectedNode.imageUrl} />
-                        ) : (
-                          <AvatarFallback
-                            className={`${getBackgroundColorForGroup(selectedNode.group)} ${getTextColorForGroup(selectedNode.group)}`}
-                          >
-                            {getInitials(selectedNode.name)}
-                          </AvatarFallback>
-                        )}
-                      </Avatar>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-bold">{selectedNode.name}</h3>
-                          {selectedNode.group === "kol" && (
-                            <Badge className="bg-cyan-500/20 text-cyan-400 border-cyan-500/20">KOL</Badge>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-400">@{selectedNode.username}</p>
-                        <div className="mt-2 flex gap-3 text-sm text-gray-400">
-                          <div>
-                            <span className="font-medium text-white">{formatNumber(selectedNode.followers)}</span>{" "}
-                            Followers
-                          </div>
-                          {selectedNode.kolRank && (
-                            <div>
-                              <span className="font-medium text-cyan-400">Rank: {selectedNode.kolRank}/100</span>
-                            </div>
-                          )}
-                        </div>
-                        {selectedNode.description && (
-                          <p className="mt-2 text-sm text-gray-300 line-clamp-3">{selectedNode.description}</p>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-gray-400">Select a node to view details</p>
-                  )}
-                </TabsContent>
-                <TabsContent value="connections" className="p-4">
-                  {loading ? (
-                    <div className="space-y-3">
-                      {[1, 2, 3].map((i) => (
-                        <div key={i} className="flex items-center gap-3">
-                          <Skeleton className="h-8 w-8 rounded-full" />
-                          <div>
-                            <Skeleton className="h-4 w-24" />
-                            <Skeleton className="h-3 w-16 mt-1" />
-                          </div>
-                          <Skeleton className="h-5 w-16 ml-auto" />
-                        </div>
-                      ))}
-                    </div>
-                  ) : selectedNode ? (
-                    <div className="space-y-3 max-h-[300px] overflow-y-auto">
-                      {getNodeConnections().length > 0 ? (
-                        getNodeConnections().map((connection) => (
-                          <div
-                            key={`${connection.source}-${connection.target}-${connection.type}`}
-                            className="flex items-center gap-3"
-                          >
-                            <Avatar className={`h-8 w-8 border ${getBorderColorForGroup(connection.node.group)}`}>
-                              {connection.node.imageUrl ? (
-                                <AvatarImage src={connection.node.imageUrl} />
-                              ) : (
-                                <AvatarFallback
-                                  className={`${getBackgroundColorForGroup(connection.node.group)} ${getTextColorForGroup(connection.node.group)}`}
-                                >
-                                  {getInitials(connection.node.name)}
-                                </AvatarFallback>
-                              )}
-                            </Avatar>
-                            <div>
-                              <div className="font-medium">{connection.node.name}</div>
-                              <div className="text-xs text-gray-400">@{connection.node.username}</div>
-                            </div>
-                            <div className="ml-auto flex flex-col items-end">
-                              <Badge
-                                className="mb-1"
-                                style={{
-                                  backgroundColor: getBackgroundColorForGroup(connection.node.group),
-                                  color: getTextColorForGroup(connection.node.group),
-                                }}
-                              >
-                                {capitalizeFirstLetter(connection.node.group)}
-                              </Badge>
-                              <Badge variant="outline" className={getConnectionTypeBadgeClass(connection.type)}>
-                                {getConnectionTypeLabel(connection.type)}
-                                {connection.count && connection.count > 1 ? ` (${connection.count})` : ""}
-                              </Badge>
-                            </div>
-                          </div>
-                        ))
-                      ) : (
-                        <p className="text-gray-400">No connections found</p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="text-gray-400">Select a node to view connections</p>
-                  )}
-                </TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    </main>
-  )
+    )
 }
 
-// Helper functions for styling
-function getBorderColorForGroup(group: string): string {
-  switch (group) {
-    case "seed":
-      return "border-rose-500/50"
-    case "influencer":
-      return "border-emerald-500/50"
-    case "project":
-      return "border-blue-500/50"
-    case "dao":
-      return "border-purple-500/50"
-    case "investor":
-      return "border-amber-500/50"
-    case "company":
-      return "border-indigo-500/50"
-    case "kol":
-      return "border-cyan-500/50"
-    default:
-      return "border-gray-500/50"
-  }
-}
 
-function getBackgroundColorForGroup(group: string): string {
-  switch (group) {
-    case "seed":
-      return "bg-rose-500/20"
-    case "influencer":
-      return "bg-emerald-500/20"
-    case "project":
-      return "bg-blue-500/20"
-    case "dao":
-      return "bg-purple-500/20"
-    case "investor":
-      return "bg-amber-500/20"
-    case "company":
-      return "bg-indigo-500/20"
-    case "kol":
-      return "bg-cyan-500/20"
-    default:
-      return "bg-gray-500/20"
-  }
-}
+// Helper functions (keep them or ensure they are imported correctly)
+// ... (getBorderColorForGroup, getBackgroundColorForGroup, getTextColorForGroup, getConnectionTypeLabel, getConnectionTypeBadgeClass, getInitials, formatNumber, capitalizeFirstLetter) ...
 
-function getTextColorForGroup(group: string): string {
-  switch (group) {
-    case "seed":
-      return "text-rose-400"
-    case "influencer":
-      return "text-emerald-400"
-    case "project":
-      return "text-blue-400"
-    case "dao":
-      return "text-purple-400"
-    case "investor":
-      return "text-amber-400"
-    case "company":
-      return "text-indigo-400"
-    case "kol":
-      return "text-cyan-400"
-    default:
-      return "text-gray-400"
-  }
-}
-
-// Helper functions for connection types
+// Example implementations if not imported:
 function getConnectionTypeLabel(type: ConnectionType): string {
-  switch (type) {
-    case "follows":
-      return "Follows"
-    case "mentioned":
-      return "Mentions"
-    case "retweeted":
-      return "Retweets"
-    case "quoted":
-      return "Quotes"
-    case "replied":
-      return "Replies"
-    default:
-      return capitalizeFirstLetter(type)
-  }
+    switch (type) {
+        case "follows": return "Follows";
+        case "mentioned": return "Mentioned";
+        case "retweeted": return "Retweeted";
+        case "quoted": return "Quoted";
+        case "replied": return "Replied";
+        default: return capitalizeFirstLetter(type);
+    }
 }
 
 function getConnectionTypeBadgeClass(type: ConnectionType): string {
-  switch (type) {
-    case "follows":
-      return "bg-gray-700/20 text-gray-400 border-gray-700/20"
-    case "mentioned":
-      return "bg-emerald-500/20 text-emerald-400 border-emerald-500/20"
-    case "retweeted":
-      return "bg-blue-500/20 text-blue-400 border-blue-500/20"
-    case "quoted":
-      return "bg-purple-500/20 text-purple-400 border-purple-500/20"
-    case "replied":
-      return "bg-pink-500/20 text-pink-400 border-pink-500/20"
-    default:
-      return "bg-gray-500/20 text-gray-400 border-gray-500/20"
-  }
+     switch (type) {
+         case "follows": return "border-blue-500/50 text-blue-400";
+         case "mentioned": return "border-purple-500/50 text-purple-400";
+         case "retweeted": return "border-green-500/50 text-green-400";
+         case "quoted": return "border-yellow-500/50 text-yellow-400";
+         case "replied": return "border-orange-500/50 text-orange-400";
+         default: return "border-gray-500/50 text-gray-400";
+     }
 }
 
-function getInitials(name: string): string {
-  return name
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .toUpperCase()
-    .substring(0, 2)
-}
-
-function formatNumber(num: number): string {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + "M"
-  }
-  if (num >= 1000) {
-    return (num / 1000).toFixed(1) + "K"
-  }
-  return num.toString()
-}
-
-function capitalizeFirstLetter(string: string): string {
-  return string.charAt(0).toUpperCase() + string.slice(1)
-}
+// Keep other helpers like getInitials, formatNumber, getBorderColorForGroup etc.
+// Ensure they are either defined here or imported from lib/ui-helpers.ts
 
